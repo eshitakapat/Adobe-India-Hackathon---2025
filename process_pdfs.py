@@ -1,168 +1,114 @@
-import json
-import pdfplumber
 import os
+import json
 import re
+import pdfplumber
 from datetime import datetime
+from sentence_transformers import SentenceTransformer, util
 
-def update_persona_config(path="persona_config.json"):
-    print("Update persona configuration:")
-    role = input("Enter persona role (e.g., 'Data Scientist'): ")
-    expertise = input("Enter persona expertise (e.g., 'Beginner', 'Advanced'): ")
-    job = input("Enter job to be done: ")
-    keywords = input("Enter keywords (comma separated): ").split(",")
-    advanced_terms = input("Enter advanced/technical terms (comma separated, optional): ").split(",")
-    config = {
-        "persona": {
-            "role": role.strip(),
-            "expertise": expertise.strip()
-        },
-        "job": job.strip(),
-        "keywords": [k.strip() for k in keywords if k.strip()],
-        "advanced_terms": [t.strip() for t in advanced_terms if t.strip()]
-    }
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(config, f, ensure_ascii=False, indent=2)
-    print(f"persona_config.json saved with new configuration.")
+# Use recommended cache env variable
+os.environ["HF_HOME"] = "/app/cache"
 
-def read_config(path="persona_config.json"):
-    if not os.path.exists(path):
-        print(f"{path} not found. Please update persona config first.")
-        exit(1)
-    with open(path, "r", encoding="utf-8") as f:
-        d = json.load(f)
-    persona = d.get('persona', {})
-    job = d.get('job', '')
-    keywords = d.get('keywords', [])
-    advanced_terms = d.get('advanced_terms', [])
-    return persona, job, keywords, advanced_terms
+# Load model
+model = SentenceTransformer("all-MiniLM-L6-v2")
 
-def extract_lines_from_pdf(pdf_path):
-    lines = []
-    with pdfplumber.open(pdf_path) as pdf:
-        for page_num, page in enumerate(pdf.pages, 1):
-            for obj in page.extract_words(extra_attrs=['size', 'fontname', 'x0', 'top']):
-                lines.append({
-                    'text': obj['text'],
-                    'size': obj['size'],
-                    'fontname': obj['fontname'],
-                    'x0': obj['x0'],
-                    'top': obj['top'],
-                    'page': page_num
-                })
-    return lines
+INPUT_DIR = "input"
+OUTPUT_DIR = "output"
+CFG_PATH = os.path.join(INPUT_DIR, "challenge1b_input.json")
 
-def detect_section_headers(lines):
-    if not lines:
-        return
-    largest_size = max(line['size'] for line in lines)
-    for idx, line in enumerate(lines):
-        text = line['text'].strip()
-        if line['size'] == largest_size and line['page'] == 1:
-            yield idx, {'level': 'Title', 'title': text, 'page': line['page']}
-        elif re.match(r'^\d+\.\d+\.\d+', text):
-            yield idx, {'level': 'H3', 'title': text, 'page': line['page']}
-        elif re.match(r'^\d+\.\d+', text):
-            yield idx, {'level': 'H2', 'title': text, 'page': line['page']}
-        elif re.match(r'^\d+\.', text):
-            yield idx, {'level': 'H1', 'title': text, 'page': line['page']}
-        elif text.isupper() and line['size'] >= largest_size - 1.5 and len(text) > 3:
-            yield idx, {'level': 'H1', 'title': text, 'page': line['page']}
+def clean_section_title(title):
+    title = re.sub(r'[^A-Za-z0-9\s\-–—:&]', '', title).strip()
+    title = re.sub(r'\s+', ' ', title)
+    return title.title()
 
-def extract_sections(lines):
-    headers = list(detect_section_headers(lines))
+def extract_sections(pdf_path):
     sections = []
-    for i, (idx, header) in enumerate(headers):
-        start = idx + 1
-        end = headers[i+1][0] if i+1 < len(headers) else len(lines)
-        section_content = "\n".join(lines[j]['text'] for j in range(start, end))
-        d = {
-            "title": header["title"],
-            "level": header["level"],
-            "page": header["page"],
-            "content": section_content
-        }
-        sections.append(d)
+    with pdfplumber.open(pdf_path) as pdf:
+        for i, page in enumerate(pdf.pages):
+            text = page.extract_text() or ""
+            lines = text.split("\n")
+            for line in lines:
+                if re.match(r"^[A-Z][A-Za-z0-9 ,:&\-–—]{3,}$", line.strip()) and len(line.strip().split()) <= 10:
+                    title = clean_section_title(line.strip())
+                    sections.append({
+                        "title": title,
+                        "text": text.strip(),
+                        "page": i + 1
+                    })
+                    break
     return sections
 
-def score_section(sec, keywords, persona_expertise=None, advanced_terms=None):
-    text = f"{sec.get('title', '')} {sec.get('content','')}".lower()
-    kw_score = sum(1 for kw in keywords if kw.lower() in text)
-    adv_score = 0
-    if persona_expertise and 'advanced' in persona_expertise.lower() and advanced_terms:
-        adv_score = sum(1 for term in advanced_terms if term in text)
-    return kw_score + adv_score
+def main():
+    with open(CFG_PATH, encoding="utf-8") as f:
+        cfg = json.load(f)
 
-def extract_top_snippet(content, keywords):
-    paras = content.split('\n')
-    scores = [(p, sum(1 for k in keywords if k.lower() in p.lower())) for p in paras]
-    scores = [t for t in scores if t[1] > 0]
-    if scores:
-        return max(scores, key=lambda t: t[1])[0]
-    return ""
+    persona = cfg["persona"]["role"]
+    task = cfg["job_to_be_done"]["task"]
+    keywords = cfg.get("keywords", [])
 
-def main(persona, job, keywords, advanced_terms):
-    input_folder = './input_pdfs'
-    output_folder = './output'
-    if not os.path.exists(output_folder):
-        os.makedirs(output_folder)
+    all_secs = []
+    all_pages = []
 
-    all_sections = []
-    pdf_files = [f for f in os.listdir(input_folder) if f.lower().endswith('.pdf')]
+    for doc in cfg["documents"]:
+        path = os.path.join(INPUT_DIR, doc["filename"])
+        sections = extract_sections(path)
+        for s in sections:
+            s["doc"] = doc["filename"]
+            all_secs.append(s)
 
-    if not pdf_files:
-        print(f"No PDFs found in {input_folder}. Please add PDFs and try again.")
-        return
+        with pdfplumber.open(path) as pdf:
+            all_pages.append({
+                "document": doc["filename"],
+                "total_pages": len(pdf.pages)
+            })
 
-    for filename in pdf_files:
-        pdf_path = os.path.join(input_folder, filename)
-        print(f"Processing {filename}...")
-        lines = extract_lines_from_pdf(pdf_path)
-        sections = extract_sections(lines)
-        for sec in sections:
-            sec['document'] = filename
-            all_sections.append(sec)
+    generic_titles = ["introduction", "summary", "conclusion", "overview"]
+    for s in all_secs:
+        score = 0
+        title = s["title"].lower()
+        for kw in keywords:
+            if kw.lower() in title:
+                score += 2
+            if kw.lower() in s["text"].lower():
+                score += 1
+        emb_section = model.encode(s["text"], convert_to_tensor=True)
+        emb_task = model.encode(task, convert_to_tensor=True)
+        sim = util.pytorch_cos_sim(emb_section, emb_task).item()
+        score += sim * 5
+        s["final_score"] = score
 
-    # Score and rank
-    for sec in all_sections:
-        sec['score'] = score_section(
-            sec, keywords,
-            persona_expertise=persona.get('expertise',''),
-            advanced_terms=advanced_terms
-        )
+    top5 = [
+        s for s in sorted(all_secs, key=lambda s: -s["final_score"])
+        if s["title"].strip().lower() not in generic_titles
+    ][:5]
 
-    # Filter and rank by score
-    ranked_sections = sorted([s for s in all_sections if s['score'] > 0], key=lambda x: x['score'], reverse=True)
-
-    # Prepare output JSON
     output = {
         "metadata": {
+            "input_documents": [os.path.basename(d["filename"]) for d in cfg["documents"]],
             "persona": persona,
-            "job": job,
-            "timestamp": str(datetime.now()),
-            "pdfs": sorted(list(set(sec["document"] for sec in ranked_sections)))
+            "job_to_be_done": task,
+            "processing_timestamp": datetime.now().isoformat()
         },
-        "results": []
+        "extracted_sections": [
+            {
+                "document": s["doc"],
+                "section_title": s["title"],
+                "importance_rank": i + 1,
+                "page_number": s["page"]
+            } for i, s in enumerate(top5)
+        ],
+        "subsection_analysis": [
+            {
+                "document": s["doc"],
+                "refined_text": s["text"],
+                "page_number": s["page"]
+            } for s in top5
+        ],
+        "all_pages_processed": all_pages
     }
-    for i, sec in enumerate(ranked_sections, 1):
-        output["results"].append({
-            "document": sec["document"],
-            "page": sec["page"],
-            "section_title": sec["title"],
-            "section_level": sec["level"],
-            "relevance_rank": i,
-            "relevance_score": sec["score"],
-            "snippet": extract_top_snippet(sec['content'], keywords)
-        })
 
-    output_path = os.path.join(output_folder, "persona_results.json")
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(output, f, ensure_ascii=False, indent=2)
-
-    print(f"Done! Results saved to {output_path}")
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    with open(os.path.join(OUTPUT_DIR, "challenge1b_output.json"), "w", encoding="utf-8") as f:
+        json.dump(output, f, indent=2, ensure_ascii=False)
 
 if __name__ == "__main__":
-    update = input("Do you want to update persona_config.json? (y/n): ").strip().lower()
-    if update == "y":
-        update_persona_config()
-    persona, job, keywords, advanced_terms = read_config()
-    main(persona, job, keywords, advanced_terms)
+    main()

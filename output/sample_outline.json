@@ -1,0 +1,80 @@
+{
+  "metadata": {
+    "input_documents": [
+      "document1.pdf",
+      "document2.pdf"
+    ],
+    "persona": "Data Scientist",
+    "job_to_be_done": "Extract relevant sections about machine learning",
+    "processing_timestamp": "2025-07-28T23:00:00.123456"
+  },
+  "extracted_sections": [
+    {
+      "document": "document1.pdf",
+      "section_title": "Machine Learning Overview",
+      "importance_rank": 1,
+      "page_number": 3
+    },
+    {
+      "document": "document2.pdf",
+      "section_title": "Supervised Learning Methods",
+      "importance_rank": 2,
+      "page_number": 7
+    },
+    {
+      "document": "document1.pdf",
+      "section_title": "Neural Networks Basics",
+      "importance_rank": 3,
+      "page_number": 10
+    },
+    {
+      "document": "document2.pdf",
+      "section_title": "Feature Engineering",
+      "importance_rank": 4,
+      "page_number": 5
+    },
+    {
+      "document": "document1.pdf",
+      "section_title": "Model Evaluation",
+      "importance_rank": 5,
+      "page_number": 15
+    }
+  ],
+  "subsection_analysis": [
+    {
+      "document": "document1.pdf",
+      "refined_text": "Machine learning is a subset of artificial intelligence focused on building systems that learn from data...",
+      "page_number": 3
+    },
+    {
+      "document": "document2.pdf",
+      "refined_text": "Supervised learning uses labeled data to train algorithms that can classify or predict outcomes...",
+      "page_number": 7
+    },
+    {
+      "document": "document1.pdf",
+      "refined_text": "Neural networks are inspired by biological brains and are used for complex pattern recognition...",
+      "page_number": 10
+    },
+    {
+      "document": "document2.pdf",
+      "refined_text": "Feature engineering involves creating meaningful input variables to improve model performance...",
+      "page_number": 5
+    },
+    {
+      "document": "document1.pdf",
+      "refined_text": "Model evaluation metrics include accuracy, precision, recall, and F1-score to judge prediction quality...",
+      "page_number": 15
+    }
+  ],
+  "all_pages_processed": [
+    {
+      "document": "document1.pdf",
+      "total_pages": 20
+    },
+    {
+      "document": "document2.pdf",
+      "total_pages": 12
+    }
+  ]
+}
